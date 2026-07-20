@@ -1,6 +1,4 @@
 .env
-data/synthea_output/**
-!data/synthea_output/.gitkeep
 __pycache__/
 *.pyc
 .venv/
