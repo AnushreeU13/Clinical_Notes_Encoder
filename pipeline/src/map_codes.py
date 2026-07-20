@@ -81,24 +81,29 @@ def _call_json(client: Groq, prompt: str) -> str:
     return call_with_backoff(do_call)
 
 
-def disambiguate_icd10(client: Groq, entity_text: str, candidates: list[dict]) -> str | None:
+def disambiguate_icd10(client: Groq, entity_text: str, candidates: list[dict]) -> tuple[str | None, str]:
     options = "; ".join(f"{c['code']}: {c['description']}" for c in candidates)
     prompt = (
         f"Given the clinical mention '{entity_text}', which of these ICD-10 codes is "
         f"most appropriate? Options: {options}. "
         'Return only JSON: {"code": "<one of the option codes>"}'
     )
+    codes_only = ", ".join(c["code"] for c in candidates)
+    simplified_prompt = (
+        f'Pick exactly one code for "{entity_text}" from this list: {codes_only}. '
+        'Return only JSON: {"code": "..."}'
+    )
     valid_codes = {c["code"] for c in candidates}
 
     def is_valid(obj):
         return isinstance(obj, dict) and obj.get("code") in valid_codes
 
-    parsed, _ = call_with_retry(
+    parsed, raw = call_with_retry(
         primary_call=lambda: _call_json(client, prompt),
-        fallback_call=lambda: _call_json(client, prompt),
+        fallback_call=lambda: _call_json(client, simplified_prompt),
         validate_fn=is_valid,
     )
-    return parsed["code"] if parsed else None
+    return (parsed["code"] if parsed else None), raw
 
 
 def map_diagnosis(client: Groq, entity_text: str) -> dict:
@@ -106,7 +111,7 @@ def map_diagnosis(client: Groq, entity_text: str) -> dict:
     if not candidates:
         return {
             "entity_text": entity_text, "icd10_code": None,
-            "icd10_description": None, "match_method": "no_match",
+            "icd10_description": None, "match_method": "no_match", "raw_response": None,
         }
 
     unique_top_match = len(candidates) == 1 or candidates[0]["score"] > candidates[1]["score"]
@@ -114,15 +119,16 @@ def map_diagnosis(client: Groq, entity_text: str) -> dict:
         best = candidates[0]
         return {
             "entity_text": entity_text, "icd10_code": best["code"],
-            "icd10_description": best["description"], "match_method": "direct",
+            "icd10_description": best["description"], "match_method": "direct", "raw_response": None,
         }
 
-    chosen_code = disambiguate_icd10(client, entity_text, candidates)
+    chosen_code, raw_response = disambiguate_icd10(client, entity_text, candidates)
     chosen = next((c for c in candidates if c["code"] == chosen_code), candidates[0])
     method = "llm_validated" if chosen_code else "llm_fallback_top_candidate"
     return {
         "entity_text": entity_text, "icd10_code": chosen["code"],
         "icd10_description": chosen["description"], "match_method": method,
+        "raw_response": raw_response,
     }
 
 
@@ -130,6 +136,10 @@ RXNORM_PROMPT = (
     "Normalize this medication mention to its generic drug name and suggest a plausible "
     'RxNorm concept. Return only JSON: {{"generic_name": "...", "rxnorm_code": "..." or null, '
     '"rxnorm_name": "..." or null}}. Medication mention: "{text}"'
+)
+SIMPLIFIED_RXNORM_PROMPT = (
+    'Return only JSON with exactly these keys: {{"generic_name": "...", "rxnorm_code": null, '
+    '"rxnorm_name": "..."}} for the medication "{text}". Use null for rxnorm_code if unsure.'
 )
 
 
@@ -139,15 +149,16 @@ def is_valid_rxnorm(obj) -> bool:
 
 def map_medication(client: Groq, entity_text: str) -> dict:
     prompt = RXNORM_PROMPT.format(text=entity_text)
-    parsed, _ = call_with_retry(
+    simplified_prompt = SIMPLIFIED_RXNORM_PROMPT.format(text=entity_text)
+    parsed, raw = call_with_retry(
         primary_call=lambda: _call_json(client, prompt),
-        fallback_call=lambda: _call_json(client, prompt),
+        fallback_call=lambda: _call_json(client, simplified_prompt),
         validate_fn=is_valid_rxnorm,
     )
     if parsed is None:
         return {
-            "entity_text": entity_text, "generic_name": None,
-            "rxnorm_code": None, "rxnorm_name": None, "validated": False,
+            "entity_text": entity_text, "generic_name": None, "rxnorm_code": None,
+            "rxnorm_name": None, "validated": False, "raw_response": raw,
         }
     return {
         "entity_text": entity_text,
@@ -155,6 +166,7 @@ def map_medication(client: Groq, entity_text: str) -> dict:
         "rxnorm_code": parsed["rxnorm_code"],
         "rxnorm_name": parsed["rxnorm_name"],
         "validated": False,  # no `rxnorm` package exists on PyPI to validate against
+        "raw_response": raw,
     }
 
 
