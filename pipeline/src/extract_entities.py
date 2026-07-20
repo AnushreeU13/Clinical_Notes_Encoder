@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from groq import Groq
+from groq import Groq, RateLimitError
 
 from utils import call_with_retry
 
@@ -105,9 +105,14 @@ def main() -> None:
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     n_processed = n_invalid = 0
+    stopped_early = None
     with open(args.output, "w", encoding="utf-8") as out_f:
         for patient_id, note in iter_notes(args.input, args.limit_notes, args.limit_patients):
-            result = extract_entities(client, note["text"])
+            try:
+                result = extract_entities(client, note["text"])
+            except RateLimitError as e:
+                stopped_early = str(e)
+                break
             if not result["valid"]:
                 n_invalid += 1
             record = {
@@ -117,10 +122,13 @@ def main() -> None:
                 **result,
             }
             out_f.write(json.dumps(record) + "\n")
+            out_f.flush()
             n_processed += 1
             time.sleep(args.sleep_seconds)
 
     print(f"Processed {n_processed} notes ({n_invalid} fell back to empty extraction) -> {args.output}")
+    if stopped_early:
+        print(f"Stopped early due to a rate/quota limit: {stopped_early}")
 
 
 if __name__ == "__main__":
