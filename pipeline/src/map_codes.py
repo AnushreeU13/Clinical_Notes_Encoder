@@ -20,7 +20,7 @@ import icd10
 from dotenv import load_dotenv
 from groq import Groq, RateLimitError
 
-from utils import call_with_retry
+from utils import call_with_backoff, call_with_retry
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -69,13 +69,16 @@ def search_icd10(query: str, top_n: int = 3) -> list[dict]:
 
 
 def _call_json(client: Groq, prompt: str) -> str:
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[{"role": "user", "content": prompt}],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    return response.choices[0].message.content
+    def do_call() -> str:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return response.choices[0].message.content
+
+    return call_with_backoff(do_call)
 
 
 def disambiguate_icd10(client: Groq, entity_text: str, candidates: list[dict]) -> str | None:
@@ -170,7 +173,8 @@ def main() -> None:
     parser.add_argument("--input", type=Path, default=Path("data/parsed/entity_extractions.jsonl"))
     parser.add_argument("--output", type=Path, default=Path("data/parsed/coded_records.jsonl"))
     parser.add_argument("--limit", type=int, default=None, help="Process at most this many notes")
-    parser.add_argument("--sleep-seconds", type=float, default=1.0)
+    parser.add_argument("--sleep-seconds", type=float, default=7.0,
+                         help="Delay between API calls to stay under Groq's 6000 TPM free-tier limit")
     args = parser.parse_args()
 
     api_key = os.environ.get("GROQ_API_KEY")

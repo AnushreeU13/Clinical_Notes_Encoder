@@ -16,7 +16,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from groq import Groq, RateLimitError
 
-from utils import call_with_retry
+from utils import call_with_backoff, call_with_retry
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
@@ -43,16 +43,19 @@ def empty_extraction() -> dict:
 
 
 def call_llama(client: Groq, system_prompt: str, note_text: str) -> str:
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": note_text},
-        ],
-        response_format={"type": "json_object"},
-        temperature=0,
-    )
-    return response.choices[0].message.content
+    def do_call() -> str:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": note_text},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0,
+        )
+        return response.choices[0].message.content
+
+    return call_with_backoff(do_call)
 
 
 def extract_entities(client: Groq, note_text: str) -> dict:
@@ -94,8 +97,8 @@ def main() -> None:
                          help="Process at most this many notes (for smoke-testing before a full run)")
     parser.add_argument("--limit-patients", type=int, default=None,
                          help="Process at most this many patients")
-    parser.add_argument("--sleep-seconds", type=float, default=1.0,
-                         help="Delay between API calls to stay under Groq free-tier rate limits")
+    parser.add_argument("--sleep-seconds", type=float, default=7.0,
+                         help="Delay between API calls to stay under Groq's 6000 TPM free-tier limit")
     args = parser.parse_args()
 
     api_key = os.environ.get("GROQ_API_KEY")
