@@ -1,5 +1,4 @@
 .env
-data/parsed/
 __pycache__/
 *.pyc
 .venv/
