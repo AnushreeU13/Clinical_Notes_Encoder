@@ -20,7 +20,7 @@ from utils import call_with_retry
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-MODEL = "llama-3.3-70b-versatile"
+MODEL = "llama-3.1-8b-instant"
 PROMPT_VERSION = "v1"
 REQUIRED_KEYS = ("diagnoses", "medications", "procedures", "symptoms")
 
