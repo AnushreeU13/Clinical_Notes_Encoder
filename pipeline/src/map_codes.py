@@ -170,14 +170,36 @@ def map_medication(client: Groq, entity_text: str) -> dict:
     }
 
 
-def iter_entity_records(path: Path, limit: int | None):
+def iter_entity_records(path: Path, limit: int | None, done_keys: set[tuple[str, str]]):
     count = 0
     with open(path, encoding="utf-8") as f:
         for line in f:
             if limit is not None and count >= limit:
                 return
-            yield json.loads(line)
+            record = json.loads(line)
+            if (record["patient_id"], record["note_id"]) in done_keys:
+                continue
+            yield record
             count += 1
+
+
+def load_done_note_ids(output_path: Path) -> tuple[set[tuple[str, str]], list[dict]]:
+    """Returns (done_keys, rows_to_keep). The last note in the file may have
+    been interrupted mid-processing (diagnoses written, medications/procedures
+    not yet reached) -- that note's rows are dropped and it's excluded from
+    done_keys so it gets fully reprocessed rather than left half-coded.
+    """
+    if not output_path.exists():
+        return set(), []
+    with open(output_path, encoding="utf-8") as f:
+        rows = [json.loads(line) for line in f]
+    if not rows:
+        return set(), []
+
+    last_key = (rows[-1]["patient_id"], rows[-1]["note_id"])
+    kept = [r for r in rows if (r["patient_id"], r["note_id"]) != last_key]
+    done_keys = {(r["patient_id"], r["note_id"]) for r in kept}
+    return done_keys, kept
 
 
 def main() -> None:
@@ -187,6 +209,8 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None, help="Process at most this many notes")
     parser.add_argument("--sleep-seconds", type=float, default=7.0,
                          help="Delay between API calls to stay under Groq's 6000 TPM free-tier limit")
+    parser.add_argument("--overwrite", action="store_true",
+                         help="Ignore any existing output and start fresh instead of resuming")
     args = parser.parse_args()
 
     api_key = os.environ.get("GROQ_API_KEY")
@@ -195,6 +219,10 @@ def main() -> None:
     client = Groq(api_key=api_key)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    done_keys, kept_rows = (set(), []) if args.overwrite else load_done_note_ids(args.output)
+    if done_keys:
+        print(f"Resuming: {len(done_keys)} notes already fully coded, skipping those")
+
     counts = {"diagnosis": 0, "medication": 0, "procedure": 0, "symptom": 0}
     stopped_early = None
 
@@ -204,9 +232,14 @@ def main() -> None:
             out_f.write(json.dumps(row) + "\n")
             out_f.flush()
 
-        for record in iter_entity_records(args.input, args.limit):
+        for row in kept_rows:
+            write(row)
+            counts[row["entity_type"]] += 1
+
+        for record in iter_entity_records(args.input, args.limit, done_keys):
             base = {
                 "patient_id": record["patient_id"],
+                "note_id": record["note_id"],
                 "note_date": record["note_date"],
                 "note_type": record["note_type"],
             }

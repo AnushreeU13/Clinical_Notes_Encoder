@@ -131,6 +131,7 @@ def parse_clinical_notes(document_references: list[dict]) -> list[dict]:
                 continue
             text = base64.b64decode(data).decode("utf-8")
             notes.append({
+                "note_id": doc.get("id"),
                 "date": doc.get("date"),
                 "type": doc_type["text"],
                 "text": text,

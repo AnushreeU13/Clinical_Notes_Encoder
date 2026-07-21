@@ -73,7 +73,20 @@ def extract_entities(client: Groq, note_text: str) -> dict:
     }
 
 
-def iter_notes(patients_path: Path, limit_notes: int | None, limit_patients: int | None):
+def load_done_keys(output_path: Path) -> set[tuple[str, str]]:
+    if not output_path.exists():
+        return set()
+    with open(output_path, encoding="utf-8") as f:
+        records = (json.loads(line) for line in f)
+        return {(r["patient_id"], r["note_id"]) for r in records}
+
+
+def iter_notes(
+    patients_path: Path,
+    limit_notes: int | None,
+    limit_patients: int | None,
+    done_keys: set[tuple[str, str]],
+):
     count = n_patients = 0
     with open(patients_path, encoding="utf-8") as f:
         for line in f:
@@ -82,6 +95,8 @@ def iter_notes(patients_path: Path, limit_notes: int | None, limit_patients: int
             patient = json.loads(line)
             patient_id = patient["demographics"]["patient_id"]
             for note in patient["clinical_notes"]:
+                if (patient_id, note["note_id"]) in done_keys:
+                    continue
                 if limit_notes is not None and count >= limit_notes:
                     return
                 yield patient_id, note
@@ -99,6 +114,8 @@ def main() -> None:
                          help="Process at most this many patients")
     parser.add_argument("--sleep-seconds", type=float, default=7.0,
                          help="Delay between API calls to stay under Groq's 6000 TPM free-tier limit")
+    parser.add_argument("--overwrite", action="store_true",
+                         help="Ignore any existing output and start fresh instead of resuming")
     args = parser.parse_args()
 
     api_key = os.environ.get("GROQ_API_KEY")
@@ -107,10 +124,15 @@ def main() -> None:
     client = Groq(api_key=api_key)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    done_keys = set() if args.overwrite else load_done_keys(args.output)
+    if done_keys:
+        print(f"Resuming: {len(done_keys)} notes already done, skipping those")
+
     n_processed = n_invalid = 0
     stopped_early = None
-    with open(args.output, "w", encoding="utf-8") as out_f:
-        for patient_id, note in iter_notes(args.input, args.limit_notes, args.limit_patients):
+    mode = "w" if args.overwrite else "a"
+    with open(args.output, mode, encoding="utf-8") as out_f:
+        for patient_id, note in iter_notes(args.input, args.limit_notes, args.limit_patients, done_keys):
             try:
                 result = extract_entities(client, note["text"])
             except RateLimitError as e:
@@ -120,6 +142,7 @@ def main() -> None:
                 n_invalid += 1
             record = {
                 "patient_id": patient_id,
+                "note_id": note["note_id"],
                 "note_date": note["date"],
                 "note_type": note["type"],
                 **result,
