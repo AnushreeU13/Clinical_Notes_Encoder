@@ -21,15 +21,27 @@ from utils import call_with_backoff, call_with_retry
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 MODEL = "llama-3.1-8b-instant"
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 REQUIRED_KEYS = ("diagnoses", "medications", "procedures", "symptoms")
 
 SYSTEM_PROMPT = """You are a clinical NLP assistant. Extract clinical entities from the \
 note below and return ONLY a JSON object with exactly these four keys, each a list of \
-strings (use [] if none are mentioned): diagnoses, medications, procedures, symptoms."""
+strings (use [] if none are mentioned): diagnoses, medications, procedures, symptoms.
+
+Rules:
+- Only list a medication if it is an actual drug, vaccine, or treatment name the patient \
+is taking or was given. Never include insurance/payer names (e.g. "Medicaid", "Anthem", \
+"Blue Cross") as medications.
+- If a section says there is none (e.g. "No Active Medications", "No Known Allergies", \
+"No complaints"), that means an EMPTY list for that category -- never include the \
+negation phrase itself as an entity.
+- Only extract things actually stated as clinical findings in the note text, not \
+demographic or administrative statements (insurance status, education level, employment)."""
 
 SIMPLIFIED_PROMPT = """Extract diagnoses, medications, procedures, and symptoms from this \
-clinical note. Return only a JSON object with those four keys, each a list of strings."""
+clinical note. Skip insurance/payer names and skip negation phrases like "No Active \
+Medications" (those mean an empty list, not an entity). Return only a JSON object with \
+those four keys, each a list of strings."""
 
 
 def is_valid_extraction(obj) -> bool:
