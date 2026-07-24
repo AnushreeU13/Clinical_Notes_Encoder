@@ -5,7 +5,7 @@ import json
 import time
 from typing import Callable
 
-from groq import RateLimitError
+from groq import APIConnectionError, RateLimitError
 
 
 def parse_json_or_none(raw: str) -> dict | None:
@@ -20,10 +20,12 @@ def call_with_backoff(
     max_retries: int = 8,
     backoff_seconds: float = 8.0,
 ) -> str:
-    """Call `call_fn()`, transparently retrying on a per-minute (TPM) rate
-    limit by waiting `backoff_seconds`. A per-day (TPD) limit means the
-    day's quota is genuinely exhausted, so that's re-raised immediately
-    instead of retried.
+    """Call `call_fn()`, transparently retrying on:
+    - a per-minute (TPM) rate limit, by waiting `backoff_seconds`
+    - a transient network/connection error (DNS blip, dropped connection)
+
+    A per-day (TPD) limit means the day's quota is genuinely exhausted, so
+    that's re-raised immediately instead of retried.
     """
     for attempt in range(max_retries):
         try:
@@ -31,6 +33,10 @@ def call_with_backoff(
         except RateLimitError as e:
             if "tokens per day" in str(e).lower():
                 raise
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(backoff_seconds)
+        except APIConnectionError:
             if attempt == max_retries - 1:
                 raise
             time.sleep(backoff_seconds)
