@@ -65,11 +65,13 @@ patients_df = spark.read.json(PATIENTS_JSONL)
 patients_demographics_df = patients_df.select("demographics.*")
 (
     patients_demographics_df.write.mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable("clinical_pipeline.raw.patients")
 )
 
 (
     patients_df.write.mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable("clinical_pipeline.raw.fhir_records")
 )
 
@@ -86,6 +88,7 @@ print(f"raw.fhir_records: {patients_df.count()} rows")
 entity_extractions_df = spark.read.json(ENTITY_EXTRACTIONS_JSONL)
 (
     entity_extractions_df.write.mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable("clinical_pipeline.processed.entity_extractions")
 )
 print(f"processed.entity_extractions: {entity_extractions_df.count()} rows")
@@ -100,6 +103,7 @@ print(f"processed.entity_extractions: {entity_extractions_df.count()} rows")
 coded_records_df = spark.read.json(CODED_RECORDS_JSONL)
 (
     coded_records_df.write.mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable("clinical_pipeline.processed.coded_records")
 )
 print(f"processed.coded_records: {coded_records_df.count()} rows")
@@ -146,6 +150,7 @@ report_rows = [
 results_df = spark.createDataFrame(report_rows)
 (
     results_df.write.mode("overwrite")
+    .option("overwriteSchema", "true")
     .saveAsTable("clinical_pipeline.evaluation.results")
 )
 
