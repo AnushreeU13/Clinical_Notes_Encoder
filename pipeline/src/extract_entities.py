@@ -20,7 +20,7 @@ from utils import call_with_backoff, call_with_retry
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "openai/gpt-oss-20b"
 PROMPT_VERSION = "v2"
 REQUIRED_KEYS = ("diagnoses", "medications", "procedures", "symptoms")
 

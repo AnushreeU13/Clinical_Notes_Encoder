@@ -11,9 +11,11 @@ Note on tooling reality vs. CLAUDE.md's assumptions:
 """
 import argparse
 import json
+import math
 import os
 import re
 import time
+from collections import Counter
 from pathlib import Path
 
 import icd10
@@ -24,10 +26,11 @@ from utils import call_with_backoff, call_with_retry
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-MODEL = "llama-3.1-8b-instant"
+MODEL = "openai/gpt-oss-20b"
 DIRECT_MATCH_THRESHOLD = 0.999
 
 _ICD10_INDEX = None
+_TOKEN_IDF = None
 
 
 def _tokenize(text: str) -> set[str]:
@@ -44,16 +47,41 @@ def _icd10_index() -> list[tuple[str, set[str], str, bool]]:
     return _ICD10_INDEX
 
 
-def search_icd10(query: str, top_n: int = 3) -> list[dict]:
+def _token_idf() -> dict[str, float]:
+    """Inverse-document-frequency weight per token across all ICD-10
+    descriptions. Plain token-overlap search ranks a rare, specific word
+    like "asthma" the same as a common word like "childhood" -- with
+    thousands of codes sharing common qualifier words, that causes massive
+    score ties, and an arbitrary tiebreak (e.g. alphabetical) can then bury
+    the actually-relevant code behind dozens of irrelevant ones that merely
+    share the common word. Weighting by rarity fixes this: matching "asthma"
+    counts far more than matching "childhood".
+    """
+    global _TOKEN_IDF
+    if _TOKEN_IDF is None:
+        index = _icd10_index()
+        doc_freq = Counter()
+        for _, desc_tokens, _, _ in index:
+            doc_freq.update(desc_tokens)
+        n_docs = len(index)
+        _TOKEN_IDF = {
+            token: math.log(n_docs / (1 + df)) + 1.0 for token, df in doc_freq.items()
+        }
+    return _TOKEN_IDF
+
+
+def search_icd10(query: str, top_n: int = 5) -> list[dict]:
     query_tokens = _tokenize(query)
     if not query_tokens:
         return []
+    idf = _token_idf()
+    query_weight = sum(idf.get(t, 1.0) for t in query_tokens)
     scored = []
     for code, desc_tokens, description, billable in _icd10_index():
         overlap = query_tokens & desc_tokens
         if not overlap:
             continue
-        score = len(overlap) / len(query_tokens)
+        score = sum(idf.get(t, 1.0) for t in overlap) / query_weight
         scored.append((score, code, description, billable))
     scored.sort(key=lambda item: (-item[0], item[1]))
     results = []
